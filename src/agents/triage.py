@@ -1,6 +1,6 @@
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 
 from src.state.models import AgentState, RedactedPatientInput, TriageResult, UrgencyLevel
 
@@ -17,8 +17,8 @@ If there is any sign of a life-threatening or emergency situation, set urgency t
 "emergency" and escalate_to_human to true."""
 
 
-def get_triage_llm() -> ChatGoogleGenerativeAI:
-    chat_model = ChatGoogleGenerativeAI(model="gemini-3.8-flash")
+def get_triage_llm() -> ChatGroq:
+    chat_model = ChatGroq(model="openai/gpt-oss-120b")
     return chat_model.with_structured_output(TriageResult)
 
 

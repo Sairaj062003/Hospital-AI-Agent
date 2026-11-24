@@ -16,7 +16,7 @@ class PatientContact(BaseModel):
 
     full_name: Optional[str] = None
     phone_number: Optional[str] = None
-    date_of_birth: Optional[str] = None
+    
 
 
 class RedactedPatientInput(BaseModel):
@@ -47,6 +47,7 @@ class SchedulingOutcome(BaseModel):
 
 class AgentState(BaseModel):
     raw_message: str
+    redacted_raw_message: Optional[str] = None
     contact: Optional[PatientContact] = None
     redacted_input: Optional[RedactedPatientInput] = None
     triage: Optional[TriageResult] = None
