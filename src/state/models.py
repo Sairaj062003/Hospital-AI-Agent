@@ -34,7 +34,7 @@ class TriageResult(BaseModel):
 
 
 class SchedulingRecommendation(BaseModel):
-    recommended_slot_id: str
+    recommended_slot_id: int
     reasoning: str
 
 
@@ -42,7 +42,7 @@ class SchedulingOutcome(BaseModel):
     recommendation: SchedulingRecommendation
     requires_approval: bool
     booked: bool
-    booked_slot_id: Optional[str] = None
+    booked_slot_id: Optional[int] = None
 
 
 class AgentState(BaseModel):

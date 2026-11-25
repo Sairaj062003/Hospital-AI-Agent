@@ -1,3 +1,4 @@
+import asyncio
 import sys
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -85,21 +86,31 @@ def build_graph():
     return graph.compile(checkpointer=MemorySaver())
 
 
-if __name__ == "__main__":
+async def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     app = build_graph()
     config = {"configurable": {"thread_id": "demo-1"}}
 
-    result = app.invoke(
+    result = await app.ainvoke(
         AgentState(raw_message="I have had severe chest pain since this morning, please help"),
         config=config,
     )
 
-    snapshot = app.get_state(config)
-    if snapshot.next:
+    snapshot = await app.aget_state(config)
+    while snapshot.next:
         payload = snapshot.tasks[0].interrupts[0].value
-        print("Human review needed:", payload)
-        answer = input(payload.get("prompt", "Decision: ") + " ")
-        result = app.invoke(Command(resume=answer), config=config)
+        print("Paused:", payload)
+
+        if payload.get("reason") == "choose_slot":
+            answer = int(input("Enter slot_id to book: "))
+        else:
+            answer = input(payload.get("prompt", "Decision: ") + " ")
+
+        result = await app.ainvoke(Command(resume=answer), config=config)
+        snapshot = await app.aget_state(config)
 
     print(result)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
