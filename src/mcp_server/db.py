@@ -60,3 +60,53 @@ def mark_slot_booked(slot_id: int) -> bool:
         conn.commit()
 
     return updated is not None
+
+
+def fetch_booked_slots() -> list[dict]:
+    """Return every booked slot, joined with its doctor's name and specialization.
+
+    There is no patient/login system yet, so this is every booking in the
+    database, not scoped to any particular user.
+    """
+    query = """
+        SELECT s.slot_id, d.name AS doctor_name, d.specialization, s.slot_time
+        FROM appointment_slots s
+        JOIN doctors d ON d.doctor_id = s.doctor_id
+        WHERE s.is_booked = TRUE
+        ORDER BY s.slot_time;
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            rows = cur.fetchall()
+
+    return [
+        {
+            "slot_id": row[0],
+            "doctor_name": row[1],
+            "specialization": row[2],
+            "slot_time": row[3].isoformat(),
+        }
+        for row in rows
+    ]
+
+
+def mark_slot_unbooked(slot_id: int) -> bool:
+    """Cancel a booking, freeing the slot back up.
+
+    Returns True if a booked slot was freed, False if it was already
+    unbooked or does not exist.
+    """
+    query = """
+        UPDATE appointment_slots
+        SET is_booked = FALSE
+        WHERE slot_id = %s AND is_booked = TRUE
+        RETURNING slot_id;
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (slot_id,))
+            updated = cur.fetchone()
+        conn.commit()
+
+    return updated is not None

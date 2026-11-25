@@ -14,16 +14,37 @@ from src.state.models import (
 load_dotenv()
 
 
-SCHEDULING_SYSTEM_PROMPT = """You are the Scheduling Agent for a healthcare assistant.
-Your only job is to recommend the single most appropriate appointment slot based on
-the patient's stated need and the list of currently available doctors and slots. Pay
-attention to each doctor's specialization - recommend a doctor whose specialization
-actually matches what the patient needs, not just the earliest available slot.
+SCHEDULING_SYSTEM_PROMPT = """You are the Scheduling Agent for a healthcare appointment booking system.
 
-You never book an appointment yourself - you only recommend a slot_id. The decision
-to actually book is made by code outside of you, after a human confirms the choice.
+Your job:
+1. From the patient's symptoms and stated need, determine which medical specialization
+   they need. You MUST pick a value that EXACTLY matches one of the "specialization"
+   values in the available doctors list below — do not paraphrase, abbreviate, or
+   invent a specialization.
 
-Return the recommended slot in the requested structured format."""
+   Common mappings (use these as guidance, not as a rigid lookup):
+   - Chest pain, heart palpitations, blood pressure → Cardiology
+   - Skin rash, acne, eczema → Dermatology
+   - Bone/joint pain, fracture, back pain → Orthopedics
+   - Headache, dizziness, numbness, seizures → Neurology
+   - Eye problems, blurred vision → Ophthalmology
+   - Ear/nose/throat, hearing loss, sinusitis → ENT
+   - Kidney pain, urinary issues → Nephrology
+   - Breathing difficulty, cough, asthma → Pulmonology
+   - Stomach pain, digestion issues, nausea → Gastroenterology
+   - Child health, pediatric concerns → Pediatrics
+   - Mental health, anxiety, depression → Psychiatry
+   - Women's health, pregnancy → Gynecology
+   - General/vague symptoms, fever, fatigue → General Medicine
+
+   If the symptoms don't clearly map to a specialty, choose "General Medicine".
+
+2. Recommend the single best slot_id from doctors who have that specialization —
+   prefer the earliest available slot unless the patient's need suggests otherwise.
+
+You never book an appointment — you only recommend. The patient confirms the choice.
+
+Return the specialization and recommended slot in the requested structured format."""
 
 
 def get_scheduling_llm() -> ChatGroq:
@@ -71,11 +92,30 @@ def validate_scheduling_output(
         raise ValueError("recommended_slot_id is required in the scheduling output.")
     if not result.reasoning:
         raise ValueError("reasoning is required in the scheduling output.")
-    valid_ids = {slot["slot_id"] for slot in available_slots}
-    if result.recommended_slot_id not in valid_ids:
+    if not result.required_specialization:
+        raise ValueError("required_specialization is required in the scheduling output.")
+
+    slots_by_id = {slot["slot_id"]: slot for slot in available_slots}
+    if result.recommended_slot_id not in slots_by_id:
         raise ValueError(
             f"recommended_slot_id {result.recommended_slot_id!r} is not an available slot."
         )
+
+    valid_specializations = {slot["specialization"] for slot in available_slots}
+    if result.required_specialization not in valid_specializations:
+        raise ValueError(
+            f"required_specialization {result.required_specialization!r} does not match "
+            "any specialization actually present in the available slots."
+        )
+
+    recommended_slot = slots_by_id[result.recommended_slot_id]
+    if recommended_slot["specialization"] != result.required_specialization:
+        raise ValueError(
+            f"recommended_slot_id {result.recommended_slot_id!r} belongs to "
+            f"{recommended_slot['specialization']!r}, which does not match the "
+            f"determined required_specialization {result.required_specialization!r}."
+        )
+
     return result
 
 
@@ -84,14 +124,36 @@ async def run_scheduling(state: AgentState) -> dict:
     recommendation = run_scheduling_llm(state.redacted_input, available_slots)
     recommendation = validate_scheduling_output(recommendation, available_slots)
 
+    # Only slots matching the determined specialization are shown to the
+    # patient - this is a code-enforced filter, not just LLM free-text
+    # reasoning, so the patient never sees irrelevant specialists.
+    matching_slots = [
+        slot for slot in available_slots
+        if slot["specialization"] == recommendation.required_specialization
+    ]
+
+    if not matching_slots:
+        interrupt({
+            "reason": "no_slots",
+            "required_specialization": recommendation.required_specialization,
+        })
+        return {
+            "scheduling_result": SchedulingOutcome(
+                recommendation=recommendation,
+                requires_approval=False,
+                booked=False,
+            )
+        }
+
     chosen_slot_id = interrupt({
         "reason": "choose_slot",
-        "available_slots": available_slots,
+        "required_specialization": recommendation.required_specialization,
+        "available_slots": matching_slots,
         "recommended_slot_id": recommendation.recommended_slot_id,
         "reasoning": recommendation.reasoning,
     })
 
-    valid_ids = {slot["slot_id"] for slot in available_slots}
+    valid_ids = {slot["slot_id"] for slot in matching_slots}
     if chosen_slot_id not in valid_ids:
         raise ValueError(f"chosen_slot_id {chosen_slot_id!r} is not an available slot.")
 

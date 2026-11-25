@@ -11,6 +11,7 @@ from src.agents.triage import run_triage
 from src.security.pii import run_pii_redaction
 from src.state.models import AgentState
 from src.guardrails.injection import run_injection_guard
+from src.guardrails.relevance import run_relevance_check
 
 def human_review_node(state: AgentState) -> dict:
     decision = interrupt({
@@ -43,6 +44,11 @@ def route_after_triage(state: AgentState) -> str:
 def route_after_injection_guard(state: AgentState) -> str:
     if state.blocked:
         return "blocked"
+    return "relevance_check"
+
+def route_after_relevance(state: AgentState) -> str:
+    if state.blocked:
+        return "blocked"
     return "pii_redaction"
 
 def route_after_human_review(state: AgentState) -> str:
@@ -55,6 +61,7 @@ def build_graph():
 
     graph.add_node("pii_redaction", run_pii_redaction)
     graph.add_node("injection_guard", run_injection_guard)
+    graph.add_node("relevance_check", run_relevance_check)
 
     graph.add_node("intake_step", run_intake)
     graph.add_node("triage_step", run_triage)
@@ -65,6 +72,10 @@ def build_graph():
     graph.set_entry_point("injection_guard")
     graph.add_conditional_edges(
         "injection_guard", route_after_injection_guard,
+        {"blocked": "blocked_step", "relevance_check": "relevance_check"}
+    )
+    graph.add_conditional_edges(
+        "relevance_check", route_after_relevance,
         {"blocked": "blocked_step", "pii_redaction": "pii_redaction"}
     )
     graph.add_edge("blocked_step", END)

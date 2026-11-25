@@ -34,6 +34,7 @@ class TriageResult(BaseModel):
 
 
 class SchedulingRecommendation(BaseModel):
+    required_specialization: str
     recommended_slot_id: int
     reasoning: str
 
