@@ -1,13 +1,13 @@
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
+from langgraph.types import interrupt
 
 from src.state.models import (
     AgentState,
     RedactedPatientInput,
     SchedulingOutcome,
     SchedulingRecommendation,
-    UrgencyLevel,
 )
 from src.tools.appointment_store import AppointmentSlot, book_slot, get_available_slots
 
@@ -74,28 +74,30 @@ def validate_scheduling_output(
     return result
 
 
-def requires_approval(urgency: UrgencyLevel) -> bool:
-    return urgency in (UrgencyLevel.HIGH, UrgencyLevel.EMERGENCY)
-
-
 def run_scheduling(state: AgentState) -> dict:
     available_slots = get_available_slots()
     recommendation = run_scheduling_llm(state.redacted_input, available_slots)
     recommendation = validate_scheduling_output(recommendation, available_slots)
 
-    needs_approval = requires_approval(state.triage.urgency)
+    chosen_slot_id = interrupt({
+        "reason": "choose_slot",
+        "available_slots": [slot.slot_id for slot in available_slots],
+        "recommended_slot_id": recommendation.recommended_slot_id,
+        "reasoning": recommendation.reasoning,
+    })
 
-    booked = False
-    booked_slot_id = None
-    if not needs_approval:
-        book_slot(recommendation.recommended_slot_id)
-        booked = True
-        booked_slot_id = recommendation.recommended_slot_id
+    # same validation idea as validate_scheduling_output - reject anything
+    # not actually in the available list, whether it's a typo or a booked slot
+    valid_ids = {slot.slot_id for slot in available_slots}
+    if chosen_slot_id not in valid_ids:
+        raise ValueError(f"chosen_slot_id {chosen_slot_id!r} is not an available slot.")
+
+    book_slot(chosen_slot_id)
 
     outcome = SchedulingOutcome(
-        recommendation=recommendation,  
-        requires_approval=needs_approval,
-        booked=booked,
-        booked_slot_id=booked_slot_id,
+        recommendation=recommendation,
+        requires_approval=True,
+        booked=True,
+        booked_slot_id=chosen_slot_id,
     )
     return {"scheduling_result": outcome}

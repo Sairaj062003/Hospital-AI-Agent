@@ -47,15 +47,32 @@ def run_triage_llm(redacted_input: RedactedPatientInput) -> TriageResult:
     return llm.invoke(prompt)
 
 
-def validate_triage_output(result: TriageResult) -> TriageResult:
-    if result.urgency == UrgencyLevel.EMERGENCY and not result.escalate_to_human:
-        raise ValueError("Emergency urgency must always have escalate_to_human=True.")
-    if not result.rationale:
-        raise ValueError("rationale is required in the triage output.")
-    return result
+def validate_triage_output(result: TriageResult , redacted_input: RedactedPatientInput) -> TriageResult:
+        emergency_keywords = [
+            "chest pain",
+            "can't breathe",
+            "cannot breathe",
+            "unconscious",
+            "severe bleeding",
+            "suicidal",
+        ]
+        patient_text = f"{redacted_input.stated_symptoms} {redacted_input.stated_need}".lower()
+        if (
+            result.urgency != UrgencyLevel.EMERGENCY
+            and any(keyword in patient_text for keyword in emergency_keywords)
+        ):
+            raise ValueError(
+                "Triage output contradicts clearly emergency symptoms - possible manipulation"
+            )
+        if result.urgency == UrgencyLevel.EMERGENCY and not result.escalate_to_human:
+           raise ValueError("Emergency urgency must always have escalate_to_human=True.")
+        if not result.rationale:
+           raise ValueError("rationale is required in the triage output.")
+     
+        return result
 
 
 def run_triage(state: AgentState) -> dict:
     result = run_triage_llm(state.redacted_input)
-    result = validate_triage_output(result)
+    result = validate_triage_output(result, state.redacted_input)
     return {"triage": result}

@@ -52,3 +52,6 @@ class AgentState(BaseModel):
     redacted_input: Optional[RedactedPatientInput] = None
     triage: Optional[TriageResult] = None
     scheduling_result: Optional[SchedulingOutcome] = None
+    blocked: bool = False
+    block_reason: Optional[str] = None
+    emergency_message: Optional[str] = None
