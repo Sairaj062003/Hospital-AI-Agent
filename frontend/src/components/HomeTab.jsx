@@ -1,27 +1,41 @@
-import { useState } from "react";
-import { Mic, Send, Bot, AlertOctagon, ShieldAlert, CheckCircle, Clock, Phone } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Mic, Square, Send, Bot, AlertOctagon, ShieldAlert, CheckCircle, Clock, Phone, X } from "lucide-react";
 import { submitQuery, resumeWithSlot } from "../api";
 import AssessmentCard from "./AssessmentCard";
 import RecommendationCard from "./RecommendationCard";
+import useSpeechToText from "../hooks/useSpeechToText";
 
 export default function HomeTab() {
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Set only when the backend pauses at choose_slot - holds everything
-  // needed to render the assessment + recommendation.
   const [pending, setPending] = useState(null);
   const [selectedSlotId, setSelectedSlotId] = useState(null);
   const [applied, setApplied] = useState(false);
 
   const [successMessage, setSuccessMessage] = useState(false);
-
   const [noSlotsSpec, setNoSlotsSpec] = useState(null);
 
-  // Terminal, non-scheduling outcomes.
   const [blockedReason, setBlockedReason] = useState(null);
   const [emergencyMessage, setEmergencyMessage] = useState(null);
+
+  const { listening, transcript, error: speechError, startListening, stopListening, clearTranscript } = useSpeechToText();
+
+  const textareaRef = useRef(null);
+
+  useEffect(() => {
+    if (transcript) {
+      setQuery(transcript);
+    }
+  }, [transcript]);
+
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+      textareaRef.current.style.height = textareaRef.current.scrollHeight + "px";
+    }
+  }, [query]);
 
   function resetOutcomes() {
     setPending(null);
@@ -34,10 +48,24 @@ export default function HomeTab() {
     setError(null);
   }
 
+  function handleCancelTranscript() {
+    setQuery("");
+    clearTranscript();
+  }
+
+  function handleMicClick() {
+    if (listening) {
+      stopListening();
+    } else {
+      startListening();
+    }
+  }
+
   async function handleSubmit(event) {
     event.preventDefault();
     if (!query.trim() || loading) return;
 
+    clearTranscript();
     resetOutcomes();
     setLoading(true);
 
@@ -81,6 +109,15 @@ export default function HomeTab() {
     }
   }
 
+  function handleKeyDown(event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      handleSubmit(event);
+    }
+  }
+
+  const showCancelTranscript = transcript && query === transcript;
+
   return (
     <div className="home-tab">
       <section className="greeting-banner">
@@ -93,20 +130,47 @@ export default function HomeTab() {
         </div>
       </section>
 
-      <form className="query-bar" onSubmit={handleSubmit}>
-        <button type="button" className="icon-btn" title="Speak your symptoms (coming soon)">
-          <Mic size={18} />
-        </button>
-        <input
-          type="text"
-          placeholder="Describe your symptoms or ask a health question..."
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-        <button type="submit" className="icon-btn send-btn" title="Submit" disabled={loading}>
-          <Send size={18} />
-        </button>
-      </form>
+      <div className="query-bar-wrapper">
+        <form className="query-bar" onSubmit={handleSubmit}>
+          <button
+            type="button"
+            className={`icon-btn mic-btn ${listening ? "mic-active" : ""}`}
+            title={listening ? "Click to stop recording" : "Click to start speaking"}
+            onClick={handleMicClick}
+            disabled={loading}
+          >
+            {listening ? <Square size={16} fill="currentColor" /> : <Mic size={18} />}
+          </button>
+          <textarea
+            ref={textareaRef}
+            className="query-input"
+            placeholder="Describe your symptoms or ask a health question..."
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={1}
+          />
+          <button type="submit" className="icon-btn send-btn" title="Submit" disabled={loading}>
+            <Send size={18} />
+          </button>
+        </form>
+
+        {showCancelTranscript && (
+          <button type="button" className="cancel-transcript" onClick={handleCancelTranscript}>
+            <X size={14} />
+            <span>Cancel transcript</span>
+          </button>
+        )}
+
+        {listening && (
+          <div className="listening-indicator">
+            <span className="pulse-dot" />
+            <span>Listening... speak now</span>
+          </div>
+        )}
+
+        {speechError && <div className="error-note">{speechError}</div>}
+      </div>
 
       {loading && (
         <div className="loading-note">

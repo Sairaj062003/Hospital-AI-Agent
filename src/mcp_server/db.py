@@ -11,6 +11,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Supabase project uses a non-default schema with a hyphen in its name, which
+# Postgres only accepts as a quoted identifier - so every table reference
+# below is fully schema-qualified rather than relying on search_path, which
+# cannot be trusted to persist across PgBouncer's transaction-pooled port.
+SCHEMA = '"hospital-scheduling-asst"'
+
 
 def get_connection():
     return psycopg2.connect(os.environ["DATABASE_URL"])
@@ -18,10 +24,10 @@ def get_connection():
 
 def fetch_available_doctor_slots() -> list[dict]:
     """Return every unbooked slot, joined with its doctor's name and specialization."""
-    query = """
+    query = f"""
         SELECT s.slot_id, d.name AS doctor_name, d.specialization, s.slot_time
-        FROM appointment_slots s
-        JOIN doctors d ON d.doctor_id = s.doctor_id
+        FROM {SCHEMA}.appointment_slots s
+        JOIN {SCHEMA}.doctors d ON d.doctor_id = s.doctor_id
         WHERE s.is_booked = FALSE
         ORDER BY s.slot_time;
     """
@@ -47,8 +53,8 @@ def mark_slot_booked(slot_id: int) -> bool:
     Returns True if the slot was booked by this call, False if it was
     already booked or does not exist.
     """
-    query = """
-        UPDATE appointment_slots
+    query = f"""
+        UPDATE {SCHEMA}.appointment_slots
         SET is_booked = TRUE
         WHERE slot_id = %s AND is_booked = FALSE
         RETURNING slot_id;
@@ -68,10 +74,10 @@ def fetch_booked_slots() -> list[dict]:
     There is no patient/login system yet, so this is every booking in the
     database, not scoped to any particular user.
     """
-    query = """
+    query = f"""
         SELECT s.slot_id, d.name AS doctor_name, d.specialization, s.slot_time
-        FROM appointment_slots s
-        JOIN doctors d ON d.doctor_id = s.doctor_id
+        FROM {SCHEMA}.appointment_slots s
+        JOIN {SCHEMA}.doctors d ON d.doctor_id = s.doctor_id
         WHERE s.is_booked = TRUE
         ORDER BY s.slot_time;
     """
@@ -97,8 +103,8 @@ def mark_slot_unbooked(slot_id: int) -> bool:
     Returns True if a booked slot was freed, False if it was already
     unbooked or does not exist.
     """
-    query = """
-        UPDATE appointment_slots
+    query = f"""
+        UPDATE {SCHEMA}.appointment_slots
         SET is_booked = FALSE
         WHERE slot_id = %s AND is_booked = TRUE
         RETURNING slot_id;
