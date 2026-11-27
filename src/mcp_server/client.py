@@ -35,9 +35,25 @@ async def list_available_doctors_and_slots() -> list[dict]:
             return json.loads(result.content[0].text)
 
 
+async def list_specializations() -> list[str]:
+    async with stdio_client(_server_params()) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+            result = await session.call_tool("list_specializations", {})
+            return json.loads(result.content[0].text)
+
+
 async def book_slot(slot_id: int) -> bool:
     async with stdio_client(_server_params()) as (read_stream, write_stream):
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
             result = await session.call_tool("book_slot", {"slot_id": slot_id})
             return json.loads(result.content[0].text)["booked"]
+
+
+async def get_hospital_info() -> dict:
+    async with stdio_client(_server_params()) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+            result = await session.call_tool("get_hospital_info", {})
+            return json.loads(result.content[0].text)

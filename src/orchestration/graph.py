@@ -5,6 +5,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph, END
 from langgraph.types import Command, interrupt
 
+from src.agents.faq import run_faq
 from src.agents.intake import run_intake
 from src.agents.scheduling import run_scheduling
 from src.agents.triage import run_triage
@@ -14,21 +15,20 @@ from src.guardrails.injection import run_injection_guard
 from src.guardrails.relevance import run_relevance_check
 
 def human_review_node(state: AgentState) -> dict:
-    decision = interrupt({
+    contact = state.contact
+    review = interrupt({
         "reason": "escalate_to_human",
-        "raw_message": state.raw_message,   # or redacted_raw_message, your call
-        "urgency": state.triage.urgency,
+        "raw_message": state.raw_message,
+        "full_name": contact.full_name if contact else None,
+        "phone_number": contact.phone_number if contact else None,
+        "urgency": state.triage.urgency.value,
         "rationale": state.triage.rationale,
         "prompt": "Tell patient to contact authorities immediately? (yes/no)",
     })
 
-    if decision == "yes":
-        return {
-            "emergency_message": "Your case is very serious and highly urgent, "
-                                  "so please contact Authorities directly instead "
-                                  "of booking here. Phone: 0224567184",
-        }
-    return {}  # "no" -> fall through to normal pipeline, nothing to set
+    if review["decision"] == "yes":
+        return {"emergency_message": review["message"]}
+    return {"admin_message": review["message"]}
 
 
 def blocked_node(state: AgentState) -> dict:
@@ -49,6 +49,8 @@ def route_after_injection_guard(state: AgentState) -> str:
 def route_after_relevance(state: AgentState) -> str:
     if state.blocked:
         return "blocked"
+    if state.message_category == "informational":
+        return "faq_step"
     return "pii_redaction"
 
 def route_after_human_review(state: AgentState) -> str:
@@ -68,6 +70,7 @@ def build_graph():
     graph.add_node("scheduling_step", run_scheduling)
     graph.add_node("human_review", human_review_node)
     graph.add_node("blocked_step", blocked_node)
+    graph.add_node("faq_step", run_faq)
 
     graph.set_entry_point("injection_guard")
     graph.add_conditional_edges(
@@ -76,9 +79,10 @@ def build_graph():
     )
     graph.add_conditional_edges(
         "relevance_check", route_after_relevance,
-        {"blocked": "blocked_step", "pii_redaction": "pii_redaction"}
+        {"blocked": "blocked_step", "faq_step": "faq_step", "pii_redaction": "pii_redaction"}
     )
     graph.add_edge("blocked_step", END)
+    graph.add_edge("faq_step", END)
     graph.add_edge("pii_redaction", "intake_step")
     graph.add_edge("intake_step", "triage_step")
     graph.add_conditional_edges(
@@ -115,7 +119,8 @@ async def main() -> None:
         if payload.get("reason") == "choose_slot":
             answer = int(input("Enter slot_id to book: "))
         else:
-            answer = input(payload.get("prompt", "Decision: ") + " ")
+            decision = input(payload.get("prompt", "Decision: ") + " ")
+            answer = {"decision": decision, "message": input("Message to patient: ")}
 
         result = await app.ainvoke(Command(resume=answer), config=config)
         snapshot = await app.aget_state(config)

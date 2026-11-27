@@ -1,7 +1,7 @@
-"""Postgres access for doctors and appointment slots.
+"""Postgres access for doctors, appointment slots and app users.
 
 This is the only module in the project that talks to the database directly.
-The MCP server (server.py) is the only caller of these functions.
+The MCP server (server.py) and the API layer call these functions.
 """
 
 import os
@@ -20,6 +20,37 @@ SCHEMA = '"hospital-scheduling-asst"'
 
 def get_connection():
     return psycopg2.connect(os.environ["DATABASE_URL"])
+
+
+def save_user(email: str, password_hash: str) -> None:
+    """Create the users table if needed, then add the user or replace their password."""
+    create = f"""
+        CREATE TABLE IF NOT EXISTS {SCHEMA}.users (
+            user_id SERIAL PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+    """
+    upsert = f"""
+        INSERT INTO {SCHEMA}.users (email, password_hash)
+        VALUES (%s, %s)
+        ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash;
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(create)
+            cur.execute(upsert, (email, password_hash))
+        conn.commit()
+
+
+def fetch_password_hash(email: str) -> str | None:
+    query = f"SELECT password_hash FROM {SCHEMA}.users WHERE email = %s;"
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (email,))
+            row = cur.fetchone()
+    return row[0] if row else None
 
 
 def fetch_available_doctor_slots() -> list[dict]:
@@ -45,6 +76,15 @@ def fetch_available_doctor_slots() -> list[dict]:
         }
         for row in rows
     ]
+
+
+def fetch_specializations() -> list[str]:
+    """Return every specialization the hospital has, including fully booked ones."""
+    query = f"SELECT DISTINCT specialization FROM {SCHEMA}.doctors ORDER BY specialization;"
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            return [row[0] for row in cur.fetchall()]
 
 
 def mark_slot_booked(slot_id: int) -> bool:

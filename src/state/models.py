@@ -56,3 +56,7 @@ class AgentState(BaseModel):
     blocked: bool = False
     block_reason: Optional[str] = None
     emergency_message: Optional[str] = None
+    admin_message: Optional[str] = None
+    no_slots_specialization: Optional[str] = None
+    message_category: Optional[str] = None
+    faq_answer: Optional[str] = None

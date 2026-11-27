@@ -1,0 +1,14 @@
+# Root secrets stay out of the image. frontend/.env is deliberately kept:
+# Vite needs it at build time, and only the built files reach the final image.
+.env
+.env.*
+.git
+venv
+.venv
+tests
+docs
+**/__pycache__
+**/*.pyc
+.pytest_cache
+frontend/node_modules
+frontend/dist

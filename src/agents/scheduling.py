@@ -3,7 +3,11 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 from langgraph.types import interrupt
 
-from src.mcp_server.client import book_slot, list_available_doctors_and_slots
+from src.mcp_server.client import (
+    book_slot,
+    list_available_doctors_and_slots,
+    list_specializations,
+)
 from src.state.models import (
     AgentState,
     RedactedPatientInput,
@@ -18,9 +22,10 @@ SCHEDULING_SYSTEM_PROMPT = """You are the Scheduling Agent for a healthcare appo
 
 Your job:
 1. From the patient's symptoms and stated need, determine which medical specialization
-   they need. You MUST pick a value that EXACTLY matches one of the "specialization"
-   values in the available doctors list below — do not paraphrase, abbreviate, or
-   invent a specialization.
+   they need. You MUST pick a value that EXACTLY matches one of the values in the
+   hospital specializations list below — do not paraphrase, abbreviate, or invent
+   a specialization. Pick the specialization the patient actually needs, even if it
+   has no available slot. Never substitute another one because of availability.
 
    Common mappings (use these as guidance, not as a rigid lookup):
    - Chest pain, heart palpitations, blood pressure → Cardiology
@@ -41,6 +46,7 @@ Your job:
 
 2. Recommend the single best slot_id from doctors who have that specialization —
    prefer the earliest available slot unless the patient's need suggests otherwise.
+   If that specialization has no available slot, set recommended_slot_id to 0.
 
 You never book an appointment — you only recommend. The patient confirms the choice.
 
@@ -53,7 +59,9 @@ def get_scheduling_llm() -> ChatGroq:
 
 
 def build_scheduling_prompt(
-    redacted_input: RedactedPatientInput, available_slots: list[dict]
+    redacted_input: RedactedPatientInput,
+    specializations: list[str],
+    available_slots: list[dict],
 ) -> list[BaseMessage]:
     human_content = f"""Recommend an appointment slot for this patient:
 
@@ -64,6 +72,10 @@ def build_scheduling_prompt(
 <stated_symptoms>
 {redacted_input.stated_symptoms}
 </stated_symptoms>
+
+<hospital_specializations>
+{specializations}
+</hospital_specializations>
 
 <available_doctors_and_slots>
 {available_slots}
@@ -78,51 +90,41 @@ Return the recommended slot in the requested structured format."""
 
 
 def run_scheduling_llm(
-    redacted_input: RedactedPatientInput, available_slots: list[dict]
+    redacted_input: RedactedPatientInput,
+    specializations: list[str],
+    available_slots: list[dict],
 ) -> SchedulingRecommendation:
     llm = get_scheduling_llm()
-    prompt = build_scheduling_prompt(redacted_input, available_slots)
+    prompt = build_scheduling_prompt(redacted_input, specializations, available_slots)
     return llm.invoke(prompt)
 
 
-def validate_scheduling_output(
-    result: SchedulingRecommendation, available_slots: list[dict]
+def validate_recommended_slot(
+    result: SchedulingRecommendation, matching_slots: list[dict]
 ) -> SchedulingRecommendation:
-    if not result.recommended_slot_id:
-        raise ValueError("recommended_slot_id is required in the scheduling output.")
     if not result.reasoning:
         raise ValueError("reasoning is required in the scheduling output.")
-    if not result.required_specialization:
-        raise ValueError("required_specialization is required in the scheduling output.")
 
-    slots_by_id = {slot["slot_id"]: slot for slot in available_slots}
-    if result.recommended_slot_id not in slots_by_id:
+    if result.recommended_slot_id not in {slot["slot_id"] for slot in matching_slots}:
         raise ValueError(
-            f"recommended_slot_id {result.recommended_slot_id!r} is not an available slot."
-        )
-
-    valid_specializations = {slot["specialization"] for slot in available_slots}
-    if result.required_specialization not in valid_specializations:
-        raise ValueError(
-            f"required_specialization {result.required_specialization!r} does not match "
-            "any specialization actually present in the available slots."
-        )
-
-    recommended_slot = slots_by_id[result.recommended_slot_id]
-    if recommended_slot["specialization"] != result.required_specialization:
-        raise ValueError(
-            f"recommended_slot_id {result.recommended_slot_id!r} belongs to "
-            f"{recommended_slot['specialization']!r}, which does not match the "
-            f"determined required_specialization {result.required_specialization!r}."
+            f"recommended_slot_id {result.recommended_slot_id!r} is not an available "
+            f"{result.required_specialization} slot."
         )
 
     return result
 
 
 async def run_scheduling(state: AgentState) -> dict:
+    specializations = await list_specializations()
     available_slots = await list_available_doctors_and_slots()
-    recommendation = run_scheduling_llm(state.redacted_input, available_slots)
-    recommendation = validate_scheduling_output(recommendation, available_slots)
+    recommendation = run_scheduling_llm(
+        state.redacted_input, specializations, available_slots
+    )
+    if recommendation.required_specialization not in specializations:
+        raise ValueError(
+            f"required_specialization {recommendation.required_specialization!r} is not "
+            "a specialization this hospital has."
+        )
 
     # Only slots matching the determined specialization are shown to the
     # patient - this is a code-enforced filter, not just LLM free-text
@@ -133,17 +135,16 @@ async def run_scheduling(state: AgentState) -> dict:
     ]
 
     if not matching_slots:
-        interrupt({
-            "reason": "no_slots",
-            "required_specialization": recommendation.required_specialization,
-        })
         return {
+            "no_slots_specialization": recommendation.required_specialization,
             "scheduling_result": SchedulingOutcome(
                 recommendation=recommendation,
                 requires_approval=False,
                 booked=False,
-            )
+            ),
         }
+
+    recommendation = validate_recommended_slot(recommendation, matching_slots)
 
     chosen_slot_id = interrupt({
         "reason": "choose_slot",

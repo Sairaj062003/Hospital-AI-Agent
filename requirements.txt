@@ -12,3 +12,4 @@ pytest==8.3.4
 psycopg2-binary==2.9.10
 mcp==1.1.2
 sse-starlette==1.6.5
+bcrypt==5.0.0

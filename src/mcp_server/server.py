@@ -12,7 +12,12 @@ import mcp.types as types
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 
-from src.mcp_server.db import fetch_available_doctor_slots, mark_slot_booked
+from src.mcp_server.db import (
+    fetch_available_doctor_slots,
+    fetch_specializations,
+    mark_slot_booked,
+)
+from src.mcp_server.hospital_info import get_hospital_info
 
 server = Server("scheduling-server")
 
@@ -27,6 +32,12 @@ async def list_tools() -> list[types.Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         types.Tool(
+            name="list_specializations",
+            description="Return every specialization the hospital has, including those "
+            "with no open appointment slot.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
+        types.Tool(
             name="book_slot",
             description="Book a specific appointment slot by its slot_id.",
             inputSchema={
@@ -34,6 +45,13 @@ async def list_tools() -> list[types.Tool]:
                 "properties": {"slot_id": {"type": "integer"}},
                 "required": ["slot_id"],
             },
+        ),
+        types.Tool(
+            name="get_hospital_info",
+            description="Return general hospital information: visiting hours, location, "
+            "emergency contact number, insurance policy, and parking details. Use this "
+            "for non-clinical questions about the hospital itself, not about doctors.",
+            inputSchema={"type": "object", "properties": {}},
         ),
     ]
 
@@ -44,9 +62,16 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         slots = fetch_available_doctor_slots()
         return [types.TextContent(type="text", text=json.dumps(slots))]
 
+    if name == "list_specializations":
+        return [types.TextContent(type="text", text=json.dumps(fetch_specializations()))]
+
     if name == "book_slot":
         booked = mark_slot_booked(arguments["slot_id"])
         return [types.TextContent(type="text", text=json.dumps({"booked": booked}))]
+
+    if name == "get_hospital_info":
+        info = get_hospital_info()
+        return [types.TextContent(type="text", text=json.dumps(info))]
 
     raise ValueError(f"Unknown tool: {name}")
 
