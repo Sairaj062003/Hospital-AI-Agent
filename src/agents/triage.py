@@ -1,3 +1,5 @@
+from typing import Optional
+
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
@@ -5,6 +7,16 @@ from langchain_groq import ChatGroq
 from src.state.models import AgentState, RedactedPatientInput, TriageResult, UrgencyLevel
 
 load_dotenv()
+
+EMERGENCY_KEYWORDS = (
+    "chest pain",
+    "can't breathe",
+    "cant breathe",
+    "cannot breathe",
+    "unconscious",
+    "severe bleeding",
+    "suicidal",
+)
 
 
 TRIAGE_SYSTEM_PROMPT = """You are the Triage Agent for a healthcare appointment booking system.
@@ -62,32 +74,45 @@ def run_triage_llm(redacted_input: RedactedPatientInput) -> TriageResult:
     return llm.invoke(prompt)
 
 
-def validate_triage_output(result: TriageResult , redacted_input: RedactedPatientInput) -> TriageResult:
-        emergency_keywords = [
-            "chest pain",
-            "can't breathe",
-            "cannot breathe",
-            "unconscious",
-            "severe bleeding",
-            "suicidal",
-        ]
-        patient_text = f"{redacted_input.stated_symptoms} {redacted_input.stated_need}".lower()
-        if (
-            result.urgency != UrgencyLevel.EMERGENCY
-            and any(keyword in patient_text for keyword in emergency_keywords)
-        ):
-            raise ValueError(
-                "Triage output contradicts clearly emergency symptoms - possible manipulation"
-            )
-        if result.urgency == UrgencyLevel.EMERGENCY and not result.escalate_to_human:
-           raise ValueError("Emergency urgency must always have escalate_to_human=True.")
-        if not result.rationale:
-           raise ValueError("rationale is required in the triage output.")
-     
-        return result
+def find_emergency_keyword(texts: list[Optional[str]]) -> Optional[str]:
+    # Phone keyboards type a curly apostrophe, e.g. "can’t breathe".
+    patient_text = " ".join(text for text in texts if text).lower().replace("’", "'")
+    return next((keyword for keyword in EMERGENCY_KEYWORDS if keyword in patient_text), None)
+
+
+def validate_triage_output(
+    result: TriageResult,
+    redacted_input: RedactedPatientInput,
+    patient_message: Optional[str] = None,
+) -> TriageResult:
+    """Enforce the safety rules in code.
+
+    A wrong AI answer is corrected, not rejected, so the case always reaches staff.
+    Urgency and escalation are only ever raised, never lowered. Keyword matching
+    ignores negation ("no chest pain"), so staff make the final call on those.
+    """
+    urgency = result.urgency
+    rationale = result.rationale.strip() or "The AI gave no explanation."
+
+    keyword = find_emergency_keyword(
+        [patient_message, *redacted_input.stated_symptoms, redacted_input.stated_need]
+    )
+    if keyword and urgency != UrgencyLevel.EMERGENCY:
+        rationale += (
+            f' Safety rule: raised from {urgency.value} to emergency because the '
+            f'message mentions "{keyword}".'
+        )
+        urgency = UrgencyLevel.EMERGENCY
+
+    must_escalate = urgency in (UrgencyLevel.HIGH, UrgencyLevel.EMERGENCY)
+    return TriageResult(
+        urgency=urgency,
+        escalate_to_human=result.escalate_to_human or must_escalate,
+        rationale=rationale,
+    )
 
 
 def run_triage(state: AgentState) -> dict:
     result = run_triage_llm(state.redacted_input)
-    result = validate_triage_output(result, state.redacted_input)
+    result = validate_triage_output(result, state.redacted_input, state.redacted_raw_message)
     return {"triage": result}
